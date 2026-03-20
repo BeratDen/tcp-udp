@@ -2,8 +2,52 @@
 #include <ws2tcpip.h>
 #include <iostream>
 #include <string>
+#include <thread>
+
+#include "../models/ClientInfo.hpp"
 
 #pragma comment(lib, "ws2_32.lib")
+
+void handleSocket(ClientInfo client)
+{
+    char buffer[1024]{};
+
+    while (true)
+    {
+        ZeroMemory(buffer, sizeof(buffer));
+
+        int bytesReceived = recv(client.socket, buffer, sizeof(buffer), 0);
+
+        if (bytesReceived > 0)
+        {
+            std::string message(buffer, bytesReceived);
+            std::cout << "Client " << client.clientId << " says: " << message << std::endl;
+
+            std::string response = "Server recieved: " + message;
+
+            int bytesSent = send(client.socket, response.c_str(), static_cast<int>(response.size()), 0);
+
+            if (bytesSent == SOCKET_ERROR)
+            {
+                std::cerr << "send failed" << WSAGetLastError() << std::endl;
+                break;
+            }
+        }
+        else if (bytesReceived == 0)
+        {
+            std::cout << "Client disconnected greacefully" << std::endl;
+            break;
+        }
+        else
+        {
+            std::cerr << "receive failed :" << WSAGetLastError() << std::endl;
+            break;
+        };
+    }
+
+    closesocket(client.socket);
+    std::cout << "Client " << client.clientId << " disconnected" << std::endl;
+}
 
 int main()
 {
@@ -64,6 +108,8 @@ int main()
 
     std::cout << "server is listening on 127.0.0.1:8080" << std::endl;
 
+    static int clientCounter = 0;
+
     while (true)
     {
         sockaddr_in clientAddr{};
@@ -80,52 +126,12 @@ int main()
             std::cerr << "accept failed" << WSAGetLastError() << std::endl;
             continue;
         };
+        
+        int clientId = clientCounter++;
 
-        char clientIp[INET_ADDRSTRLEN]{};
-        inet_ntop(AF_INET, &clientAddr.sin_addr, clientIp, INET_ADDRSTRLEN);
-
-        std::cout << "Client connected: " << clientIp << ":" << ntohs(clientAddr.sin_port) << std::endl;
-
-        char buffer[1024]{};
-
-        while (true)
-        {
-            ZeroMemory(buffer, sizeof(buffer));
-
-            int bytesRecieved = recv(clientSocket, buffer, sizeof(buffer), 0);
-
-            if (bytesRecieved > 0)
-            {
-                std::string message(buffer, bytesRecieved);
-                std::cout << "Client says: " << message << std::endl;
-
-                std::string response = "Server recevied message: " + message;
-
-                int bytesSend = send(
-                    clientSocket,
-                    response.c_str(),
-                    static_cast<int>(response.size()),
-                    0);
-
-                if (bytesSend == SOCKET_ERROR)
-                {
-                    std::cerr << "send failed" << WSAGetLastError() << std::endl;
-                    break;
-                }
-            }
-            else if (bytesRecieved == 0)
-            {
-                std::cout << "Client disconnected greacefully" << std::endl;
-                break;
-            }
-            else
-            {
-                std::cout << "recv failed" << WSAGetLastError() << std::endl;
-                break;
-            }
-        }
-        closesocket(clientSocket);
-        std::cout << "Client disconnected" << std::endl;
+        ClientInfo client{clientSocket, clientAddr, clientId};
+        std::thread clientThread(handleSocket, client);
+        clientThread.detach();
     }
 
     closesocket(listenSocket);
