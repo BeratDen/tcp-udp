@@ -8,9 +8,7 @@
 int main() {
 
     WSAData wsaData{};
-    int wsaResult = WSAStartup(MAKEWORD(2,2), &wsaData);
-
-    if (wsaResult != 0) {std::cerr << "WSAStartup failed" << WSAGetLastError() << std::endl; return 1;}
+    if(WSAStartup(MAKEWORD(2,2), &wsaData) != 0) {std::cerr << "WSAStartup failed" << WSAGetLastError() << std::endl; return 1;}
 
     SOCKET clientSocket = socket(AF_INET,SOCK_STREAM, IPPROTO_TCP);
     if(clientSocket == INVALID_SOCKET) {std::cerr << "socket failed :" << WSAGetLastError() << std::endl; WSACleanup(); return 1;};
@@ -19,33 +17,35 @@ int main() {
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(8080);
     // deprecated old api
-    serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    // serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
-    int connectResult = connect(
-        clientSocket,
-        reinterpret_cast<sockaddr*>(&serverAddr),
-        sizeof(serverAddr)
-    );
+    int result = inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr);
+    if(result <= 0) {std::cerr << "inet_pton failed" << WSAGetLastError() << std::endl; closesocket(clientSocket); return 1;};
 
-    if(connectResult == SOCKET_ERROR) {std::cerr << "connect failed" << WSAGetLastError() << std::endl; closesocket(clientSocket); return 1;};
+    if(connect(clientSocket, reinterpret_cast<sockaddr*>(&serverAddr), sizeof(serverAddr)) == SOCKET_ERROR){std::cerr << "connect failed" << WSAGetLastError() << std::endl; closesocket(clientSocket); return 1;};
 
-    std::cout << "client connected to 127.0.0.1:8080" << std::endl;
+    std::cout << "client connected to server" << std::endl;
 
-    std::string message = "Hello server this is a message from client!";
+    while (true) {
+        std::string message{};
+        std::cout << "> ";
+        std::getline(std::cin, message);
+
+        if(message == "exit") {std::cout << "Closing connection" << std::endl; break;};
+        if(message.empty()) {std::cerr << "message is empty" << std::endl; continue;};
+
+        int bytesSent = send(clientSocket,message.c_str(),static_cast<int>(message.size()),0);
+
+        if(bytesSent == SOCKET_ERROR) {std::cout << "send failed" << WSAGetLastError() << std::endl; break;};
+
+        char buffer[1024]{};
+        int bytesReceived = recv(clientSocket,buffer,sizeof(buffer),0);
+
+        if(bytesReceived > 0) {std::string response(buffer,bytesReceived); std::cout << response << std::endl;}
+        else if (bytesReceived == 0) {std::cout << "Server closed the connection" << std::endl; break;}
+        else {std::cerr << "recv failed" << WSAGetLastError() << std::endl; break;};
+    }
     
-    int bytesSent = send(clientSocket,message.c_str(),static_cast<int>(message.size()),0);
-
-    if(bytesSent == SOCKET_ERROR) {std::cerr << "send failed" << WSAGetLastError() << std::endl; closesocket(clientSocket); return 1;};
-
-    std::cout << "sent " << bytesSent << std::endl;
-
-    char buffer[1024]{};
-    int bytesReceived = recv(clientSocket,buffer,sizeof(buffer),0);
-
-    if (bytesReceived > 0) {std::string response(buffer, bytesReceived); std::cout << "received" << bytesReceived << " bytes: " << response << std::endl;}
-    else if (bytesReceived == 0) {std::cout << "Server closed the connection" << std::endl;}
-    else {std::cerr << "recv failed" << WSAGetLastError() << std::endl; return 1;};
-
     closesocket(clientSocket);
     WSACleanup();
     return 0;
