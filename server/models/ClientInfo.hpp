@@ -8,7 +8,7 @@ struct ClientInfo
     sockaddr_in address;
     int clientId;
 
-    std::string getClientLabel()
+    std::string getClientLabel() const
     {
         return "Client " + std::to_string(clientId);
     }

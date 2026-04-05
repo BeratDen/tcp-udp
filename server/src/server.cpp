@@ -1,15 +1,56 @@
+
+
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <iostream>
 #include <string>
 #include <thread>
+#include <vector>
+#include <mutex>
+#include <algorithm>
 
 #include "../models/ClientInfo.hpp"
+#include "../Sockets/SocketGuard.hpp"
+using namespace Sockets;
 
 #pragma comment(lib, "ws2_32.lib")
 
+std::vector<ClientInfo> clients{};
+std::mutex clientsMutex{};
+
+void removeClient(SOCKET clientSocket ) {
+    std::lock_guard<std::mutex> lock(clientsMutex);
+
+    clients.erase(
+        std::remove_if(
+            clients.begin(),
+            clients.end(),
+            [clientSocket](const ClientInfo& client) { return client.socket == clientSocket; }
+        ),
+        clients.end()
+    );
+}
+
+void broadcastMessage(const std::string& message,SOCKET senderSocket) {
+    std::lock_guard<std::mutex> lock(clientsMutex);
+
+    for(const auto& client: clients) {
+        if(client.socket == senderSocket) {continue;}
+
+        int result = send(client.socket,message.c_str(),static_cast<int>(message.size()),0);
+
+        if(result == SOCKET_ERROR) { std::cerr << "send failed" << WSAGetLastError() << std::endl; }
+    }
+}
+
 void handleSocket(ClientInfo client)
 {
+    SocketGuard guard(client.socket);
+    std::string clientLabel = client.getClientLabel();
+    std::cout << clientLabel << " connected" << std::endl;
+    std::string joinMessage = "[SERVER] " + clientLabel + " joined the chat" + "\n";
+    broadcastMessage(joinMessage,client.socket);
+
     char buffer[1024]{};
 
     while (true)
@@ -21,17 +62,10 @@ void handleSocket(ClientInfo client)
         if (bytesReceived > 0)
         {
             std::string message(buffer, bytesReceived);
-            std::cout << "Client " << client.clientId << " says: " << message << std::endl;
-
-            std::string response = "Server recieved: " + message;
-
-            int bytesSent = send(client.socket, response.c_str(), static_cast<int>(response.size()), 0);
-
-            if (bytesSent == SOCKET_ERROR)
-            {
-                std::cerr << "send failed" << WSAGetLastError() << std::endl;
-                break;
-            }
+            std::string fullMessage = "[" + clientLabel + "] " + message + "\n";
+            
+            std::cout << fullMessage;
+            broadcastMessage(fullMessage,client.socket);
         }
         else if (bytesReceived == 0)
         {
@@ -44,9 +78,12 @@ void handleSocket(ClientInfo client)
             break;
         };
     }
+    removeClient(client.socket);
 
-    closesocket(client.socket);
-    std::cout << "Client " << client.clientId << " disconnected" << std::endl;
+    std::string leaveMessage = "[SERVER] " + clientLabel + " left the chat" + "\n";
+    broadcastMessage(leaveMessage,client.socket);
+
+    std::cout << clientLabel << " disconnected" << std::endl;
 }
 
 int main()
@@ -74,7 +111,6 @@ int main()
     serverAddr.sin_port = htons(8080); // Host TO Network Short (Benim bilgisayarımdaki sayıyı (host), network formatına çevir)
     // old api deprecated
     // serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
-
     int result = inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr);
 
     if (result <= 0)
@@ -97,14 +133,7 @@ int main()
         return 1;
     }
 
-    int listenResult = listen(listenSocket, SOMAXCONN); // SOMAXCONN listen fonksiyonunda kullanılan maksimum backlog değeri // backlog aynı anda bağlanmayı bekleyen client sayısı
-
-    if (listenResult == SOCKET_ERROR)
-    {
-        std::cerr << "listen failed" << WSAGetLastError() << std::endl;
-        closesocket(listenSocket);
-        return 1;
-    }
+    if(listen(listenSocket, SOMAXCONN) == SOCKET_ERROR) { std::cerr << "listen failed" << WSAGetLastError() << std::endl; closesocket(listenSocket); return 1; };
 
     std::cout << "server is listening on 127.0.0.1:8080" << std::endl;
 
@@ -130,6 +159,12 @@ int main()
         int clientId = clientCounter++;
 
         ClientInfo client{clientSocket, clientAddr, clientId};
+
+        {
+            std::lock_guard<std::mutex> lock(clientsMutex);
+            clients.push_back(client);
+        }
+
         std::thread clientThread(handleSocket, client);
         clientThread.detach();
     }
